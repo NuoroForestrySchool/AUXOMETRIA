@@ -1,0 +1,161 @@
+---
+title: "Auxometria"
+subtitle: "Calcolo dell'incremento di volume di un bosco con il metodo della 'formula generale'"
+author:
+  - Scotti Roberto
+  - La Marca Orazio
+  - Rinaldini Giulia
+output: 
+  html_notebook: 
+    toc: true
+    toc_float: false
+---
+# Introduzione
+
+Il procedimento di stima tramite 'formula generale' è basato sul rilievo di incrementi di diametro e di altezza su molti 'alberi modello'.
+Gli incrementi compensati vengono utilizzati per stimare il saggio di incremento di volume tramite la seguente approssimazione:  
+$$
+\frac {\Delta V}  V \;=\enspace 2 \; \frac {\Delta d130} {d130} + \frac {\Delta htot} {htot}
+$$
+
+```{r setup, echo=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(
+  results = 'hold'
+  , tidy = TRUE
+)
+library(tidyverse)
+```
+
+
+# Acesso ai rilievi e controllo di congruenza della base dati
+```{r read-data, results='hide', cache = TRUE}
+library(googlesheets)
+suppressMessages(library(dplyr))
+gsn <- "Particella Podernovo piante crescita ORIGINALE"
+#  gs_ls(gsn)  # useful the first time to recover the key
+# key:                                          "1J1InF1CwalFzOVyngKfBque8L3SZ8TTz-WDW49gjoLs"
+gsurl <- "https://docs.google.com/spreadsheets/d/1J1InF1CwalFzOVyngKfBque8L3SZ8TTz-WDW49gjoLs"
+DB0 <- gs_url(gsurl)
+tabs <- tribble(
+  ~ord,                    ~ws_name,                    ~tibble,  ~p_key, ~e_key, ~in_tab
+,    0,   "CoefficientiDiRiduzione",   "CoefficientiDiRiduzione",  NA,     NA,     NA
+,    1,                 "Complesso",                 "Complesso",  NA,     NA,     NA
+,    2, "PiedilistaCavallettamento", "PiedilistaCavallettamento",  NA,     NA,     NA
+,    3,             "AlberiModello",             "AlberiModello", "id_am", NA,     NA
+,    4,          "IncrementiRaggio",          "IncrementiRaggio", "id_am", "id_am", "AlberiModello"
+,    5,         "IncrementiAltezza",         "IncrementiAltezza", "id_am", "id_am", "AlberiModello"
+)
+## Acquisizione tabelle da GoogleSheet
+for (i in 1:nrow(tabs)) {
+  assign(tabs$tibble[i], gs_read(DB0, tabs$ws_name[i], verbose=F))
+  Sys.sleep(2)
+}
+## Controllo chiavi
+# In condizioni di applicazione operativa è opportuno passare attraverso un sistema di gestione di 
+# basi di dati (ad es. SQLite) per consolidare preventivamente questi controlli.
+# In questo esempio semplificato è presente una sola Area di Saggio
+# Il controllo sulle 'chiavi' delle tabelle riguarda semplicemente l'identificativo del fusto 'id_am', 
+# che è chiave primaria per 'AlberiModello' ed è anche chiave esterna per le tabelle degli incrementi.
+## Controllo chiavi primarie
+chk_key_is_unique <- function(t) {
+  t <- unlist(t)
+  length(t) == length(unique(t))
+}
+#   AlberiModello$id_am[1] <- AlberiModello$id_am[2]  # for testing purposes
+for (i in which(!is.na(tabs$p_key))) {
+  key <- unlist(get(tabs$tibble[i])[,tabs$p_key[i]])
+  if (!length(key) == length(unique(key))) 
+    stop(paste('"', tabs$p_key[i], '"', "not unique in", '"', tabs$tibble[i]), '"' )
+}
+## Controllo chiavi esterne
+#   IncrementiAltezza$id_am[1] <- 99   # for testin purposes
+for (i in which(!is.na(tabs$e_key))) {
+  key <- unlist(get(tabs$tibble[i])[,tabs$e_key[i]])
+  ref <- unlist(get(tabs$in_tab[i])[,tabs$e_key[i]])
+  if (!length(key) == length(intersect(key, ref))) 
+    stop(paste('"', tabs$e_key[i], '"', "not mapped out of", '"', tabs$tibble[i]), '"' )
+}
+
+```
+# Calcolo incremento di volume
+```{r inc_volume, fig.align='center'}
+source("F_regr.plot.R")
+k_ha <- 1 / Complesso$sup_ads_ha
+# coefficiente di espansione della superficie di rilevo all'ettaro
+
+# Classi diametriche
+acld <- 5
+Tavola <- PiedilistaCavallettamento %>%
+  fill(specie) %>%
+  mutate(cld = round(PiedilistaCavallettamento$d_130/acld)*acld) %>%
+  group_by(specie, cld) %>%
+  summarise( freq = sum(frequenza, na.rm=T)) %>%
+  mutate(freq_ha = freq * k_ha) %>%
+  rename(d_130 = cld)
+
+# Curva ipsometrica
+# Rinaldini:   =13.625*LN(A3)-16.875
+summary(ci <- lm(h_tot ~ log(d_130), AlberiModello))
+plot(regr.plot(df=AlberiModello, fit=ci, xvar="d_130", xpred = Tavola$d_130,
+                xlbl = "d130 [cm]", ylbl = "altezza [m]", tit = "Curva ipsometrica"))
+Tavola <- Tavola %>%
+  mutate(altezza = predict(ci, Tavola))
+
+# Volume
+Tavola <- Tavola %>%
+  left_join(select(CoefficientiDiRiduzione, D, F), by = c("d_130" = "D")) %>%
+  mutate( vol_unit = F * altezza * d_130^2 * pi/40000
+          , vol_classe = vol_unit * freq_ha)
+
+# Incrementi di diametro
+irc <- "inc_r_"
+IncRaggio <- IncrementiRaggio  %>% 
+      gather(starts_with(irc), key = "year0", value = "inc_r") %>%
+      mutate(year = as.numeric(substr(year0, 
+                                      nchar(irc)+1, nchar(year0)))) %>%
+      select(id_am, year, inc_r)
+IncDiam <- IncRaggio %>%
+  group_by(id_am) %>%
+  summarise(inc_d = mean(inc_r) *2 /1000) %>%
+  left_join(select(AlberiModello, id_am, d_130), by="id_am")
+summary(cid <- lm(inc_d ~ d_130, IncDiam))
+# Rinaldini:  =0.0165*(A3)-0.2202
+print(regr.plot(df = IncDiam, fit = cid, tit = "Compensazione incrementi di d_130"))
+Tavola <- Tavola %>%
+  mutate(inc_d = predict(cid, Tavola))
+
+# Incremento di altezza
+ihc <- "inc_h_"
+IncAltezza <- IncrementiAltezza %>%
+      gather(starts_with(ihc), key = "year0", value = "inc_h") %>%
+      mutate(year = as.numeric(substr(year0, 
+                                      nchar(ihc)+1, nchar(year0)))) %>%
+      select(id_am, year, inc_h)
+IncAltezza_sintesi <- IncAltezza %>%
+  group_by(id_am) %>%
+  summarise(inc_h = mean(inc_h)/100 ) %>%
+  left_join(select(AlberiModello, id_am, d_130), by="id_am")
+summary(cih <- lm(inc_h ~ log(d_130), IncAltezza_sintesi))
+# Rinaldini:  =(0.2642*LN(A3)-0.5592)
+print(regr.plot(df = IncAltezza_sintesi, fit = cih, xvar = "d_130", tit = "Compensazione incrementi di h_tot"))
+Tavola <- Tavola %>%
+  mutate(inc_h = predict(cih, Tavola))
+
+# Incremento di volume
+Tavola <- Tavola %>%
+  mutate(inc_V = vol_classe * (2*inc_d/d_130 + inc_h/altezza) )
+
+Tavola %>%
+  ungroup() %>%
+  select(-specie, -freq) %>%
+  knitr::kable(digits=3)
+
+
+```
+
+# Conclusione
+Si stimano:  
+* `r signif(sum(Tavola$vol_classe),4)`  _m^2^ ha^-1^_   di __massa in piedi__  
+* `r signif(sum(Tavola$inc_V),4)`  _m^2^ ha^-1^ anno^-1^_  di __incremento di volume__
+
