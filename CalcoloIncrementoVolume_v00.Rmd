@@ -9,7 +9,17 @@ output:
   html_notebook: 
     toc: true
     toc_float: false
+  github_document: default
 ---
+# Premessa
+Esercizio svolto come esempio didattico di gestione di rilevi, elaborazione di dati e produzione di risultati documentati.
+Esercizio svolto utilizzando l'approccio 'tidy' (ordinato) proposto con 'tidyverse'
+[http://adv-r.had.co.nz/Computing-on-the-language.html
+Recently, since dplyr <= 0.6.0 a new way of dealing with NSE was introduced, called tidyeval]
+Programma (e documento) sono disponibili su GitHub.
+Clonare (o fork-are) https://github.com/nuoroforestryschool/AUXOMETRIA
+Salvare eventuali modifiche al programma (che include il testo) e proporre l'integrazione (richiedere merge)
+
 # Introduzione
 
 Il procedimento di stima tramite 'formula generale' è basato sul rilievo di incrementi di diametro e di altezza su molti 'alberi modello'.
@@ -83,8 +93,12 @@ for (i in which(!is.na(tabs$e_key))) {
 source("F_regr.plot.R")
 k_ha <- 1 / Complesso$sup_ads_ha
 # coefficiente di espansione della superficie di rilevo all'ettaro
+d_130_lbl <- "d_130 [cm]"
+h_tot_lbl <- "altezza [m]"
+inc_d_lbl <- "%Delta d [cm]"
+inc_h_lbl <- "%Delta h [m]"
 
-# Classi diametriche
+# Classi diametriche e distribuzione frequenze
 acld <- 5
 Tavola <- PiedilistaCavallettamento %>%
   fill(specie) %>%
@@ -98,7 +112,7 @@ Tavola <- PiedilistaCavallettamento %>%
 # Rinaldini:   =13.625*LN(A3)-16.875
 summary(ci <- lm(h_tot ~ log(d_130), AlberiModello))
 plot(regr.plot(df=AlberiModello, fit=ci, xvar="d_130", xpred = Tavola$d_130,
-                xlbl = "d130 [cm]", ylbl = "altezza [m]", tit = "Curva ipsometrica"))
+                xlbl = d_130_lbl, ylbl = h_tot_lbl, tit = "Curva ipsometrica"))
 Tavola <- Tavola %>%
   mutate(altezza = predict(ci, Tavola))
 
@@ -121,7 +135,8 @@ IncDiam <- IncRaggio %>%
   left_join(select(AlberiModello, id_am, d_130), by="id_am")
 summary(cid <- lm(inc_d ~ d_130, IncDiam))
 # Rinaldini:  =0.0165*(A3)-0.2202
-print(regr.plot(df = IncDiam, fit = cid, tit = "Compensazione incrementi di d_130"))
+print(regr.plot(df = IncDiam, fit = cid, tit = "Compensazione incrementi di d_130", 
+                xlbl = d_130_lbl, ylbl = inc_d_lbl))
 Tavola <- Tavola %>%
   mutate(inc_d = predict(cid, Tavola))
 
@@ -138,7 +153,9 @@ IncAltezza_sintesi <- IncAltezza %>%
   left_join(select(AlberiModello, id_am, d_130), by="id_am")
 summary(cih <- lm(inc_h ~ log(d_130), IncAltezza_sintesi))
 # Rinaldini:  =(0.2642*LN(A3)-0.5592)
-print(regr.plot(df = IncAltezza_sintesi, fit = cih, xvar = "d_130", tit = "Compensazione incrementi di h_tot"))
+print(regr.plot(df = IncAltezza_sintesi, fit = cih, xvar = "d_130", 
+                tit = "Compensazione incrementi di h_tot", 
+                xlbl = d_130_lbl, ylbl = inc_h_lbl))
 Tavola <- Tavola %>%
   mutate(inc_h = predict(cih, Tavola))
 
